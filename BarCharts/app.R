@@ -1,11 +1,15 @@
 library(shiny)
 library(dplyr)
 library(readr)
-library(shiny)
+library(plyr)
+library(data.table)
+library(ggplot2)
+library(reshape2)
+library(scales)
 
 ####### Read in the nypd dataset #######
 nypd <- read_csv("nypd_short.csv")
-
+nypd_arr <- read_csv("nypd_arrest.csv")
 
 ####### Custom Colors #######
 customColors <- c("#a6cee3", "#1f78b4", "#b2df84", "#33a02c",
@@ -52,9 +56,9 @@ QuanOptions = c("Stopped" = "Stopped",
                 "Frisked" = "Frisked",
                 "Searched" = "Searched",
                 "Arrested" = "Arrested",
-                "Force" = "Force",
                 ForceVariables)
 
+####### User Interface #######
 ui <- fluidPage(
     titlePanel("NYPD Bar Charts"),
     fluidRow(
@@ -105,13 +109,7 @@ ui <- fluidPage(
         
     ))
 
-library(shiny)
-library(ggplot2)
-library(reshape2)
-library(plyr)
-library(dplyr)
-library(scales)
-
+#######Server#######
 server <- function(input, output){
     
     FilterNYPD <- function(dataset){
@@ -142,7 +140,7 @@ server <- function(input, output){
             }
         } else{
             if(input$YType == "ArrestPercent"){
-                nypd <- nypd
+                nypd <- nypd_arr
             }
             nypd <- FilterNYPD(nypd)
             
@@ -213,10 +211,12 @@ server <- function(input, output){
     
     preparePercentData <- reactive({
         if(input$YType == "ArrestPercent"){
-            nypd <- nypd
+            nypd <- nypd_arr
         }
-        
         nypd <- FilterNYPD(nypd)
+        if(input$Color != "None"){
+            nypd <- arrange(nypd, nypd[[input$Color]])
+        }
         
         if(!is.null(input$ModifyForce) & input$Yaxis == "Force"){
             currentData <- ModifyForce()
@@ -233,14 +233,14 @@ server <- function(input, output){
             
             ddplyVariables <- c("Xvar")
             
-            if(input$Facet != "None"){
-                currentData$Facet <- nypd[[input$Facet]]
-                ddplyVariables <- c(ddplyVariables, "Facet")
-            }
-            
             if(input$Color != "None"){
                 currentData$Color <- nypd[[input$Color]]
                 ddplyVariables <- c(ddplyVariables, "Color")
+            }
+            
+            if(input$Facet != "None"){
+                currentData$Facet <- nypd[[input$Facet]]
+                ddplyVariables <- c(ddplyVariables, "Facet")
             }
             
             currentData <- ddply(currentData, ddplyVariables, summarise,
@@ -286,7 +286,21 @@ server <- function(input, output){
                 currentPlot <- ggplot(
                     data=currentData,
                     aes(x = Xvar, y = Yvar))
-            } else {
+            } else if (input$YType == "Percentage")
+            {
+                setDT(currentData)[ , sum.value := sum(DivideBy), by = Xvar]
+                currentData <- mutate(currentData, true_perc = totalYvar/sum.value)
+                currentData <- select(currentData, -c(Percentage))
+                currentData <- mutate(currentData, Percentage = true_perc)
+                currentPlot <- ggplot(
+                    data=currentData,
+                    aes(x = Xvar, y = Percentage))
+            }
+            else if (input$YType == "ArrestPercent"){
+                setDT(currentData)[ , sum.value := sum(DivideBy), by = Xvar]
+                currentData <- mutate(currentData, true_perc = totalYvar/sum.value)
+                currentData <- select(currentData, -c(Percentage))
+                currentData <- mutate(currentData, Percentage = true_perc*0.01)
                 currentPlot <- ggplot(
                     data=currentData,
                     aes(x = Xvar, y = Percentage))
@@ -296,7 +310,7 @@ server <- function(input, output){
                 geom_bar(stat = "identity", position="stack") +
                 xlab(input$Xaxis) + scale_y_continuous(labels = comma)
             
-            # Color:
+            ##Color:
             if(input$Color != "None"){
                 currentPlot <- currentPlot + aes(fill=Color) +
                     theme(legend.position="right", axis.title=element_text(size=18)) +
